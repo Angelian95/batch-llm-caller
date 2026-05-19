@@ -199,8 +199,18 @@
       </div>
 
       <div class="field">
+        <label for="apiUrl">API URL</label>
+        <input id="apiUrl" type="text" value="http://localhost:1234/v1/chat/completions">
+      </div>
+
+      <div class="field">
+        <label for="apiKey">API Key</label>
+        <input id="apiKey" type="password" value="">
+      </div>
+
+      <div class="field">
         <label for="modelName">Model name</label>
-        <input id="modelName" type="text" value="qwen3.5-0.8b">
+        <input id="modelName" type="text" value="qwen3.5-0.8b" placeholder="qwen3.5-0.8b (LM Studio), gemini-2.5-flash (Google AI Studio), meta-llama/llama-3.3-70b-instruct:free (OpenRouter)">
       </div>
 
       <div class="actions">
@@ -215,12 +225,10 @@
   </main>
 
   <script>
-    const endpoints = [
-      "http://localhost:1234/v1/chat/completions",
-      "http://127.0.0.1:1234/v1/chat/completions"
-    ];
     const systemPromptInput = document.getElementById("systemPrompt");
     const promptFileInput = document.getElementById("promptFile");
+    const apiUrlInput = document.getElementById("apiUrl");
+    const apiKeyInput = document.getElementById("apiKey");
     const modelNameInput = document.getElementById("modelName");
     const runButton = document.getElementById("runButton");
     const downloadButton = document.getElementById("downloadButton");
@@ -251,12 +259,18 @@
         .filter((line) => line.length > 0);
     }
 
-    async function postChatCompletion(endpoint, input, systemPrompt, model) {
-      const response = await fetch(endpoint, {
+    async function callModel(apiUrl, apiKey, input, systemPrompt, model) {
+      const headers = {
+        "Content-Type": "application/json"
+      };
+
+      if (apiKey) {
+        headers.Authorization = `Bearer ${apiKey}`;
+      }
+
+      const response = await fetch(apiUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers,
         body: JSON.stringify({
           model,
           messages: [
@@ -289,21 +303,6 @@
           : "";
 
       return content || "[No response content]";
-    }
-
-    async function callModel(input, systemPrompt, model) {
-      let lastError = null;
-
-      for (const endpoint of endpoints) {
-        try {
-          return await postChatCompletion(endpoint, input, systemPrompt, model);
-        } catch (error) {
-          lastError = error;
-        }
-      }
-
-      const message = lastError && lastError.message ? lastError.message : "request failed";
-      throw new Error(`${message}. Check that LM Studio is running with its local server enabled on port 1234.`);
     }
 
     function renderResult(row) {
@@ -362,6 +361,8 @@
 
     async function runBatch() {
       const file = promptFileInput.files[0];
+      const apiUrl = apiUrlInput.value.trim();
+      const apiKey = apiKeyInput.value.trim();
       const model = modelNameInput.value.trim();
       const systemPrompt = systemPromptInput.value;
 
@@ -372,6 +373,11 @@
 
       if (!model) {
         setStatus("Enter a model name before running.", true);
+        return;
+      }
+
+      if (!apiUrl) {
+        setStatus("Enter an API URL before running.", true);
         return;
       }
 
@@ -397,7 +403,7 @@
 
           let responseText = "";
           try {
-            responseText = await callModel(input, systemPrompt, model);
+            responseText = await callModel(apiUrl, apiKey, input, systemPrompt, model);
           } catch (error) {
             responseText = error && error.message ? `Error: ${error.message}` : "Error: request failed";
           }
