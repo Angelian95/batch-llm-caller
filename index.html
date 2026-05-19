@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM batch caller</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #1f2933;
+      --muted: #657282;
+      --border: #d8dee6;
+      --accent: #2563eb;
+      --accent-dark: #1d4ed8;
+      --error: #b42318;
+      --success: #166534;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 48px 20px;
+    }
+
+    h1 {
+      margin: 0 0 28px;
+      font-size: 2rem;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+
+    label {
+      font-weight: 650;
+    }
+
+    textarea,
+    input[type="text"],
+    input[type="file"] {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+    }
+
+    textarea,
+    input[type="text"] {
+      padding: 11px 12px;
+    }
+
+    textarea {
+      min-height: 130px;
+      resize: vertical;
+    }
+
+    input[type="file"] {
+      padding: 10px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      margin-top: 8px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 11px 16px;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:hover:not(:disabled) {
+      background: var(--accent-dark);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    #downloadButton {
+      display: none;
+      background: var(--success);
+    }
+
+    .status {
+      margin-top: 22px;
+      padding: 14px;
+      min-height: 52px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fbfcfe;
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
+
+    .status.error {
+      color: var(--error);
+      border-color: #f1b8b2;
+      background: #fff7f6;
+    }
+
+    .results {
+      display: grid;
+      gap: 14px;
+      margin-top: 24px;
+    }
+
+    .result-row {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+    }
+
+    .result-header {
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+
+    .result-text {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .result-input {
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    @media (max-width: 560px) {
+      main {
+        padding: 28px 14px;
+      }
+
+      .panel {
+        padding: 18px;
+      }
+
+      button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>LLM batch caller</h1>
+
+    <section class="panel" aria-label="Batch caller controls">
+      <div class="field">
+        <label for="systemPrompt">System prompt</label>
+        <textarea id="systemPrompt" placeholder="Paste the system prompt here"></textarea>
+      </div>
+
+      <div class="field">
+        <label for="promptFile">Prompt file</label>
+        <input id="promptFile" type="file" accept=".txt,.csv,text/plain,text/csv">
+      </div>
+
+      <div class="field">
+        <label for="modelName">Model name</label>
+        <input id="modelName" type="text" value="qwen3.5-0.8b">
+      </div>
+
+      <div class="actions">
+        <button id="runButton" type="button">Run</button>
+        <button id="downloadButton" type="button">Download CSV</button>
+      </div>
+
+      <div id="status" class="status" role="status" aria-live="polite">Choose a .txt or .csv file to begin.</div>
+    </section>
+
+    <section id="results" class="results" aria-label="Results"></section>
+  </main>
+
+  <script>
+    const endpoints = [
+      "http://localhost:1234/v1/chat/completions",
+      "http://127.0.0.1:1234/v1/chat/completions"
+    ];
+    const systemPromptInput = document.getElementById("systemPrompt");
+    const promptFileInput = document.getElementById("promptFile");
+    const modelNameInput = document.getElementById("modelName");
+    const runButton = document.getElementById("runButton");
+    const downloadButton = document.getElementById("downloadButton");
+    const statusArea = document.getElementById("status");
+    const resultsArea = document.getElementById("results");
+
+    let results = [];
+
+    function setStatus(message, isError = false) {
+      statusArea.textContent = message;
+      statusArea.classList.toggle("error", isError);
+    }
+
+    function readFileAsText(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("Could not read the selected file."));
+        reader.readAsText(file);
+      });
+    }
+
+    function splitPrompts(text) {
+      return text
+        .replace(/^\uFEFF/, "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    }
+
+    async function postChatCompletion(endpoint, input, systemPrompt, model) {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: input }
+          ]
+        })
+      });
+
+      const text = await response.text();
+      let data = null;
+
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch (error) {
+        throw new Error(`HTTP ${response.status}: ${text || response.statusText}`);
+      }
+
+      if (!response.ok) {
+        const apiMessage = data && data.error && data.error.message ? data.error.message : text;
+        throw new Error(`HTTP ${response.status}: ${apiMessage || response.statusText}`);
+      }
+
+      const content = data &&
+        data.choices &&
+        data.choices[0] &&
+        data.choices[0].message &&
+        typeof data.choices[0].message.content === "string"
+          ? data.choices[0].message.content
+          : "";
+
+      return content || "[No response content]";
+    }
+
+    async function callModel(input, systemPrompt, model) {
+      let lastError = null;
+
+      for (const endpoint of endpoints) {
+        try {
+          return await postChatCompletion(endpoint, input, systemPrompt, model);
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      const message = lastError && lastError.message ? lastError.message : "request failed";
+      throw new Error(`${message}. Check that LM Studio is running with its local server enabled on port 1234.`);
+    }
+
+    function renderResult(row) {
+      const container = document.createElement("article");
+      container.className = "result-row";
+
+      const inputHeader = document.createElement("div");
+      inputHeader.className = "result-header";
+      inputHeader.textContent = `Row ${row.row_number} input`;
+
+      const inputText = document.createElement("p");
+      inputText.className = "result-text result-input";
+      inputText.textContent = row.input;
+
+      const responseHeader = document.createElement("div");
+      responseHeader.className = "result-header";
+      responseHeader.textContent = "Response";
+
+      const responseText = document.createElement("p");
+      responseText.className = "result-text";
+      responseText.textContent = row.response;
+
+      container.append(inputHeader, inputText, responseHeader, responseText);
+      resultsArea.appendChild(container);
+    }
+
+    function csvEscape(value) {
+      const text = String(value == null ? "" : value);
+      if (/[",\r\n]/.test(text)) {
+        return `"${text.replace(/"/g, '""')}"`;
+      }
+      return text;
+    }
+
+    function downloadCsv() {
+      const header = ["row_number", "input", "response"];
+      const rows = results.map((row) => [
+        row.row_number,
+        row.input,
+        row.response
+      ]);
+      const csv = [header, ...rows]
+        .map((row) => row.map(csvEscape).join(","))
+        .join("\r\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = "results.csv";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function runBatch() {
+      const file = promptFileInput.files[0];
+      const model = modelNameInput.value.trim();
+      const systemPrompt = systemPromptInput.value;
+
+      if (!file) {
+        setStatus("Choose a .txt or .csv file before running.", true);
+        return;
+      }
+
+      if (!model) {
+        setStatus("Enter a model name before running.", true);
+        return;
+      }
+
+      runButton.disabled = true;
+      downloadButton.style.display = "none";
+      results = [];
+      resultsArea.textContent = "";
+      setStatus("Reading file...");
+
+      try {
+        const text = await readFileAsText(file);
+        const prompts = splitPrompts(text);
+
+        if (prompts.length === 0) {
+          setStatus("The selected file does not contain any non-empty prompt lines.", true);
+          return;
+        }
+
+        for (let index = 0; index < prompts.length; index += 1) {
+          const input = prompts[index];
+          const rowNumber = index + 1;
+          setStatus(`Processing row ${rowNumber} of ${prompts.length}...`);
+
+          let responseText = "";
+          try {
+            responseText = await callModel(input, systemPrompt, model);
+          } catch (error) {
+            responseText = error && error.message ? `Error: ${error.message}` : "Error: request failed";
+          }
+
+          const row = {
+            row_number: rowNumber,
+            input,
+            response: responseText
+          };
+          results.push(row);
+          renderResult(row);
+        }
+
+        setStatus(`Done. Processed ${results.length} rows.`);
+        downloadButton.style.display = "inline-block";
+      } catch (error) {
+        setStatus(error && error.message ? error.message : "An unexpected error occurred.", true);
+      } finally {
+        runButton.disabled = false;
+      }
+    }
+
+    runButton.addEventListener("click", runBatch);
+    downloadButton.addEventListener("click", downloadCsv);
+  </script>
+</body>
+</html>
